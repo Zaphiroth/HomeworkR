@@ -7,7 +7,6 @@
 
 
 options(java.parameters = "-Xmx2048m",
-        # encoding = "UTF-8",
         stringsAsFactors = FALSE)
 
 ##---- loading the required packages ----
@@ -23,7 +22,6 @@ suppressPackageStartupMessages({
   require(car)
   require(data.table)
   require(tidyverse)
-  # require(factoextra)
   require(Rwordseg)
   require(tm)
   require(tmcn)
@@ -40,6 +38,7 @@ test.raw <- read_csv2("Input/Test_DataSet.csv")
 
 stopword1 <- read.csv("Input/CNstopwords.csv")
 stopword2 <- read.csv("Input/stop_words_zh.csv")
+stopword3 <- read.csv("Input/stopwords.csv")
 
 
 ##---- Cleaning ----
@@ -47,15 +46,13 @@ train.set <- train.raw %>%
   left_join(train.label, by = "id") %>% 
   unite("title_content", title, content, sep = " ") %>% 
   mutate(title_content = gsub("[[:punct:][:digit:][:blank:][:space:]a-zA-Z]", "", title_content)) %>% 
-  filter(!is.na(id), !is.na(title_content), !is.na(label)) %>% 
-  filter(row_number() <= 1000)
+  filter(!is.na(id), !is.na(title_content), !is.na(label))
 
 test.set <- test.raw %>% 
   separate(`id,title,content`, c("id", "title", "content"), sep = ",") %>% 
   unite("title_content", title, content, sep = " ") %>% 
   mutate(title_content = gsub("[[:punct:][:digit:][:blank:][:space:]a-zA-Z]", "", title_content)) %>% 
-  filter(!is.na(id), !is.na(title_content)) %>% 
-  filter(row_number() <= 1000)
+  filter(!is.na(id), !is.na(title_content))
 
 
 ##---- description ----
@@ -69,12 +66,12 @@ train.label.bar <- ggplot(label.count, mapping = aes(x = label, y = n))+
 ##---- Word segment ----
 train.seg <- segmentCN(train.set$title_content, analyzer = "jiebaR") %>% 
   lapply(function(x) {
-    setdiff(setdiff(x, stopword1$word), stopword2$word)
+    setdiff(setdiff(setdiff(x, stopword1$word), stopword2$word), stopword3$word)
   })
 
 test.seg <- segmentCN(test.set$title_content, analyzer = "jiebaR") %>% 
   lapply(function(x) {
-    setdiff(setdiff(x, stopword1$word), stopword2$word)
+    setdiff(setdiff(setdiff(x, stopword1$word), stopword2$word), stopword3$word)
   })
 
 # train.tm <- segmentCN(train.set$title_content, analyzer = "jiebaR", returnType = "tm")
@@ -91,7 +88,7 @@ word.freq <- c(unlist(train.seg), unlist(test.seg)) %>%
   mutate(freq_cumsum = cumsum(freq),
          freq_cumprop = freq_cumsum / sum(freq))
 
-write.csv(word.freq[word.freq$freq >= 200, ], "Output/Wordcloud_check.csv")
+# write.csv(word.freq[word.freq$freq >= 200, ], "Output/Wordcloud_check.csv")
 
 # wordcloud
 total.wordcloud <- wordcloud2(word.freq[word.freq$freq >= 200, ], size = 0.5)
@@ -209,5 +206,5 @@ total.dist <- dist(total.matrix.scale, method = "euclidean")
 
 cluster.fit <- hclust(total.dist, method = "ward.D")
 
-plot(cluster.fit)
+cluster.plot <- plot(cluster.fit)
 
