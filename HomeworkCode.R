@@ -206,5 +206,5 @@ total.dist <- dist(total.matrix.scale, method = "euclidean")
 
 cluster.fit <- hclust(total.dist, method = "ward.D")
 
-cluster.plot <- plot(cluster.fit)
+plot(cluster.fit)
 
