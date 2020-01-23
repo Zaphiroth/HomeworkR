@@ -23,6 +23,7 @@ suppressPackageStartupMessages({
   require(car)
   require(data.table)
   require(tidyverse)
+  # require(factoextra)
   require(Rwordseg)
   require(tm)
   require(tmcn)
@@ -80,7 +81,7 @@ test.seg <- segmentCN(test.set$title_content, analyzer = "jiebaR") %>%
 # test.tm <- segmentCN(test.set$title_content, analyzer = "jiebaR", returnType = "tm")
 
 
-##---- Word cloud ----
+##---- Wordcloud ----
 # word frequency
 word.freq <- c(unlist(train.seg), unlist(test.seg)) %>% 
   table() %>% 
@@ -96,6 +97,58 @@ write.csv(word.freq[word.freq$freq >= 200, ], "Output/Wordcloud_check.csv")
 total.wordcloud <- wordcloud2(word.freq[word.freq$freq >= 200, ], size = 0.5)
 
 
+##---- Sentiment analysis ----
+# dictionary
+word.dictionary.raw <- read.xlsx("Input/情感词汇本体.xlsx")
+
+word.dictionary <- word.dictionary.raw %>% 
+  distinct() %>% 
+  filter(!is.na(sentiment)) %>% 
+  mutate(intensity = if_else(stri_sub(sentiment, 1, 1) == "N", -intensity, intensity)) %>% 
+  select(word, intensity)
+
+# train set sentiment score
+train.word <- lapply(seq_along(train.seg), function(i) {
+  data.frame(id = train.set$id[i],
+             label = train.set$label[i],
+             word = train.seg[[i]])
+}) %>% 
+  rbind.fill() %>% 
+  filter(!is.na(word))
+
+label.score <- train.word %>% 
+  left_join(word.dictionary, by = "word") %>% 
+  group_by(id, label) %>% 
+  summarise(score = sum(intensity, na.rm = TRUE),
+            flag = sum(!is.na(intensity))) %>% 
+  ungroup() %>% 
+  mutate(score = ifelse(flag == 0, NA, score)) %>% 
+  filter(!is.na(score)) %>% 
+  group_by(score) %>% 
+  summarise(label = round(mean(label))) %>% 
+  ungroup()
+
+# test set sentiment label
+test.word <- lapply(seq_along(test.seg), function(i) {
+  data.frame(id = test.set$id[i],
+             word = test.seg[[i]])
+}) %>% 
+  rbind.fill() %>% 
+  filter(!is.na(word))
+
+test.label <- test.word %>% 
+  left_join(word.dictionary, by = "word") %>% 
+  group_by(id) %>% 
+  summarise(score = sum(intensity, na.rm = TRUE),
+            flag = sum(!is.na(intensity))) %>% 
+  ungroup() %>% 
+  mutate(score = sapply(score, function(x) {
+    temp <- abs(x - label.score$score)
+    label.score$score[temp == min(temp)][1]
+  })) %>% 
+  left_join(label.score, by = "score")
+
+
 ##---- Document term matrix ----
 # train
 train.corpus <- lapply(train.seg, function(x) {
@@ -103,9 +156,6 @@ train.corpus <- lapply(train.seg, function(x) {
 }) %>% 
   VectorSource() %>% 
   Corpus()
-
-# Sys.setlocale(locale = "English")
-# Sys.setlocale(locale="Chinese (Simplified)_People's Republic of China.936")
 
 train.dtm <- DocumentTermMatrix(train.corpus, 
                                 control = list(weighting = weightTfIdf,
@@ -130,56 +180,34 @@ test.dtm.remove <- removeSparseTerms(test.dtm, sparse = 0.95)
 
 test.dtm.matrix <- as.matrix(test.dtm.remove)
 
+# total
+total.seg <- c(train.seg, test.seg)
 
-##---- Sentiment analysis ----
-# dictionary
-word.dictionary.raw <- read.xlsx("Input/情感词汇本体.xlsx")
-
-word.dictionary <- word.dictionary.raw %>% 
-  distinct() %>% 
-  filter(!is.na(sentiment)) %>% 
-  mutate(intensity = if_else(stri_sub(sentiment, 1, 1) == "N", -intensity, intensity)) %>% 
-  select(word, intensity)
-
-# train set sentiment score
-label.score <- lapply(seq_along(train.seg), function(i) {
-  data.frame(id = train.set$id[i],
-             label = train.set$label[i],
-             word = train.seg[[i]])
+total.corpus <- lapply(total.seg, function(x) {
+  paste0(x, collapse = " ")
 }) %>% 
-  rbind.fill() %>% 
-  left_join(word.dictionary, by = "word") %>% 
-  group_by(id, label) %>% 
-  summarise(score = sum(intensity, na.rm = TRUE),
-            flag = sum(!is.na(intensity))) %>% 
-  ungroup() %>% 
-  mutate(score = ifelse(flag == 0, NA, score)) %>% 
-  filter(!is.na(score)) %>% 
-  group_by(score) %>% 
-  summarise(label = round(mean(label))) %>% 
-  ungroup()
+  VectorSource() %>% 
+  Corpus()
 
-# test set sentiment label
-test.label <- lapply(seq_along(test.seg), function(i) {
-  data.frame(id = test.set$id[i],
-             word = test.seg[[i]])
-}) %>% 
-  rbind.fill() %>% 
-  left_join(word.dictionary, by = "word") %>% 
-  group_by(id) %>% 
-  summarise(score = sum(intensity, na.rm = TRUE),
-            flag = sum(!is.na(intensity))) %>% 
-  ungroup() %>% 
-  mutate(score = sapply(score, function(x) {
-    temp <- abs(x - label.score$score)
-    label.score$score[temp == min(temp)][1]
-  })) %>% 
-  left_join(label.score, by = "score")
+total.dtm <- TermDocumentMatrix(total.corpus,
+                                control = list(weighting = weightTfIdf,
+                                               wordLengths = c(1, Inf)))
+
+total.dtm.remove <- removeSparseTerms(total.dtm, sparse = 0.95)
+
+total.dtm.matrix <- as.matrix(total.dtm.remove)
+
+high.freq.word <- findFreqTerms(total.dtm.remove, 4)
 
 
 ##---- Cluster analysis ----
-chk <- kmeans(train.dtm.matrix, 3)
+# scale
+total.matrix.scale <- scale(total.dtm.matrix[rownames(total.dtm.matrix) %in% high.freq.word, ])
 
+# hierarchical cluster
+total.dist <- dist(total.matrix.scale, method = "euclidean")
 
+cluster.fit <- hclust(total.dist, method = "ward.D")
 
+plot(cluster.fit)
 
