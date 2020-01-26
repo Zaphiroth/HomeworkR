@@ -25,7 +25,6 @@ suppressPackageStartupMessages({
   require(Rwordseg)
   require(tm)
   require(tmcn)
-  require(chinese.misc)
   require(ggplot2)
   require(wordcloud2)
 })
@@ -46,13 +45,15 @@ train.set <- train.raw %>%
   left_join(train.label, by = "id") %>% 
   unite("title_content", title, content, sep = " ") %>% 
   mutate(title_content = gsub("[[:punct:][:digit:][:blank:][:space:]a-zA-Z]", "", title_content)) %>% 
-  filter(!is.na(id), !is.na(title_content), !is.na(label))
+  filter(!is.na(id), !is.na(title_content), !is.na(label)) %>% 
+  filter(row_number() <= 1000)
 
 test.set <- test.raw %>% 
   separate(`id,title,content`, c("id", "title", "content"), sep = ",") %>% 
   unite("title_content", title, content, sep = " ") %>% 
   mutate(title_content = gsub("[[:punct:][:digit:][:blank:][:space:]a-zA-Z]", "", title_content)) %>% 
-  filter(!is.na(id), !is.na(title_content))
+  filter(!is.na(id), !is.na(title_content)) %>% 
+  filter(row_number() <= 1000)
 
 
 ##---- description ----
@@ -88,7 +89,7 @@ word.freq <- c(unlist(train.seg), unlist(test.seg)) %>%
   mutate(freq_cumsum = cumsum(freq),
          freq_cumprop = freq_cumsum / sum(freq))
 
-# write.csv(word.freq[word.freq$freq >= 200, ], "Output/Wordcloud_check.csv")
+write.csv(word.freq, "Output/Word_frequency.csv", row.names = FALSE)
 
 # wordcloud
 total.wordcloud <- wordcloud2(word.freq[word.freq$freq >= 200, ], size = 0.5)
@@ -105,20 +106,21 @@ word.dictionary <- word.dictionary.raw %>%
   select(word, intensity)
 
 # train set sentiment score
-train.word <- lapply(seq_along(train.seg), function(i) {
+train.score <- lapply(seq_along(train.seg), function(i) {
   data.frame(id = train.set$id[i],
              label = train.set$label[i],
              word = train.seg[[i]])
 }) %>% 
   rbind.fill() %>% 
-  filter(!is.na(word))
-
-label.score <- train.word %>% 
+  filter(!is.na(word)) %>% 
   left_join(word.dictionary, by = "word") %>% 
   group_by(id, label) %>% 
   summarise(score = sum(intensity, na.rm = TRUE),
             flag = sum(!is.na(intensity))) %>% 
   ungroup() %>% 
+  select(id, score, label, flag)
+
+label.score <- train.word %>% 
   mutate(score = ifelse(flag == 0, NA, score)) %>% 
   filter(!is.na(score)) %>% 
   group_by(score) %>% 
@@ -126,14 +128,12 @@ label.score <- train.word %>%
   ungroup()
 
 # test set sentiment label
-test.word <- lapply(seq_along(test.seg), function(i) {
+test.score <- lapply(seq_along(test.seg), function(i) {
   data.frame(id = test.set$id[i],
              word = test.seg[[i]])
 }) %>% 
   rbind.fill() %>% 
-  filter(!is.na(word))
-
-test.label <- test.word %>% 
+  filter(!is.na(word)) %>% 
   left_join(word.dictionary, by = "word") %>% 
   group_by(id) %>% 
   summarise(score = sum(intensity, na.rm = TRUE),
@@ -143,7 +143,12 @@ test.label <- test.word %>%
     temp <- abs(x - label.score$score)
     label.score$score[temp == min(temp)][1]
   })) %>% 
-  left_join(label.score, by = "score")
+  left_join(label.score, by = "score") %>% 
+  select(id, score, label, flag)
+
+# write out
+write.csv(train.score, "Output/Train_sentiment_score.csv", row.names = FALSE)
+write.csv(test.score, "Output/Test_sentiment_score.csv", row.names = FALSE)
 
 
 ##---- Document term matrix ----
